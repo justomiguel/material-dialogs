@@ -2,137 +2,153 @@ package com.afollestad.materialdialogs.prefs;
 
 import android.app.Dialog;
 import android.content.Context;
-import android.graphics.PorterDuff;
-import android.os.Build.VERSION;
-import android.os.Build.VERSION_CODES;
+import android.content.DialogInterface;
+import android.os.Build;
 import android.os.Bundle;
 import android.preference.EditTextPreference;
+import android.preference.PreferenceManager;
+import android.support.annotation.NonNull;
 import android.util.AttributeSet;
-import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.EditText;
-import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.afollestad.materialdialogs.MaterialDialog.Builder;
 import com.afollestad.materialdialogs.MaterialDialog.ButtonCallback;
 import com.afollestad.materialdialogs.R;
+import com.afollestad.materialdialogs.internal.MDTintHelper;
+import com.afollestad.materialdialogs.util.DialogUtils;
+
+import java.lang.reflect.Method;
 
 /**
- * @author Marc Holder Kluver (marchold), Mark Sutherland (msutherland4807)
+ * @author Aidan Follestad (afollestad)
  */
-public class MaterialEditTextPreference extends EditTextPreference
-{
-	/**
-	 * Holds colorAccent from theme, initialized in constructor
-	 */
-	private int mColor = 0;
+public class MaterialEditTextPreference extends EditTextPreference {
 
-	/**
-	 * Local EditText that we're going to display. Refers to same obj as parent class
-	 */
-	private EditText mEditText;
+    private int mColor = 0;
+    private MaterialDialog mDialog;
 
-	@Override
-	public EditText getEditText() { return mEditText; }
+    public MaterialEditTextPreference(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        mColor = DialogUtils.resolveColor(context, R.attr.colorAccent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            mColor = DialogUtils.resolveColor(context, android.R.attr.colorAccent, mColor);
+        }
+    }
 
-	/**
-	 * Constructor
-	 */
-	public MaterialEditTextPreference(Context context, AttributeSet attrs) {
-		super(context, attrs);
+    public MaterialEditTextPreference(Context context) {
+        this(context, null);
+    }
 
-		// Find the accent color for the EditText background (underline)
-		if (VERSION.SDK_INT < VERSION_CODES.LOLLIPOP) {
-			TypedValue value = new TypedValue();
-			context.getTheme().resolveAttribute(R.attr.colorAccent, value, true);
-			mColor = value.data;
-		}
+    @Override
+    protected void onAddEditTextToDialogView(@NonNull View dialogView, @NonNull EditText editText) {
+        if (editText.getParent() != null)
+            ((ViewGroup) getEditText().getParent()).removeView(editText);
+        ((ViewGroup) dialogView).addView(editText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
 
-		mEditText = super.getEditText();
-	}
+    @Override
+    protected void onBindDialogView(@NonNull View view) {
+        getEditText().setText("");
+        if (getText() != null)
+            getEditText().setText(getText());
+        ViewParent oldParent = getEditText().getParent();
+        if (oldParent != view) {
+            if (oldParent != null)
+                ((ViewGroup) oldParent).removeView(getEditText());
+            onAddEditTextToDialogView(view, getEditText());
+        }
+    }
 
-	/**
-	 * Constructor
-	 */
-	public MaterialEditTextPreference(Context context) {
-		this(context, null);
-	}
+    @Override
+    public Dialog getDialog() {
+        return mDialog;
+    }
 
-	/**
-	 * Overridden from EditTextPreference
-	 */
-	@Override
-	protected void showDialog(Bundle state) {
-		Context context = getContext();
+    @Override
+    protected void showDialog(Bundle state) {
+        Builder mBuilder = new MaterialDialog.Builder(getContext())
+                .title(getDialogTitle())
+                .icon(getDialogIcon())
+                .positiveText(getPositiveButtonText())
+                .negativeText(getNegativeButtonText())
+                .callback(callback)
+                .dismissListener(this)
+                .showListener(new DialogInterface.OnShowListener() {
+                    @Override
+                    public void onShow(DialogInterface dialog) {
+                        if (getEditText().getText().length() > 0)
+                            getEditText().setSelection(getEditText().length());
+                    }
+                });
 
-		// Color our EditText if need be. Lollipop does it by default
-		if (VERSION.SDK_INT < VERSION_CODES.LOLLIPOP)
-			mEditText.getBackground().setColorFilter(mColor, PorterDuff.Mode.SRC_ATOP);
+        View layout = LayoutInflater.from(getContext()).inflate(R.layout.md_stub_inputpref, null);
+        onBindDialogView(layout);
 
-		// Set up our builder
-		Builder mBuilder = new MaterialDialog.Builder(getContext())
-				.title(getTitle())
-				.icon(getDialogIcon())
-				.positiveText(getPositiveButtonText())
-				.negativeText(getNegativeButtonText())
-				.callback(callback)
-				.content(getDialogMessage());
+        MDTintHelper.setTint(getEditText(), mColor);
 
-		// Create our layout, put the EditText inside, then add to dialog
-		FrameLayout layout = (FrameLayout)LayoutInflater.from(context).inflate(R.layout.md_input_dialog, null);
-		onBindDialogView(layout);
-		mBuilder.customView(layout, false);
+        TextView message = (TextView) layout.findViewById(android.R.id.message);
+        if (getDialogMessage() != null && getDialogMessage().toString().length() > 0) {
+            message.setVisibility(View.VISIBLE);
+            message.setText(getDialogMessage());
+        } else {
+            message.setVisibility(View.GONE);
+        }
+        mBuilder.customView(layout, false);
 
-		// Create the dialog
-		MaterialDialog mDialog = mBuilder.build();
-		if (state != null)
-			mDialog.onRestoreInstanceState(state);
+        PreferenceManager pm = getPreferenceManager();
+        try {
+            Method method = pm.getClass().getDeclaredMethod(
+                    "registerOnActivityDestroyListener",
+                    PreferenceManager.OnActivityDestroyListener.class);
+            method.setAccessible(true);
+            method.invoke(pm, this);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
 
-		// Show soft keyboard
-		requestInputMethod(mDialog);
+        mDialog = mBuilder.build();
+        if (state != null)
+            mDialog.onRestoreInstanceState(state);
+        requestInputMethod(mDialog);
 
-		mDialog.setOnDismissListener(this);
-		mDialog.show();
-	}
+        mDialog.show();
+    }
 
-	/**
-	 * Adds the EditText widget of this preference to the dialog's view.
-	 *
-	 * Overridden from EditTextPreference so we don't go searching for internal
-	 * Android layouts
-	 */
-	@Override
-	protected void onAddEditTextToDialogView(View dialogView, EditText editText) {
-		ViewGroup viewGroup = (ViewGroup) dialogView;
-		viewGroup.removeAllViews();
-		viewGroup.addView(editText, ViewGroup.LayoutParams.MATCH_PARENT,
-				ViewGroup.LayoutParams.WRAP_CONTENT);
-	}
+    /**
+     * Callback listener for the MaterialDialog. Positive button checks with
+     * OnPreferenceChangeListener before committing user entered text
+     */
+    private final ButtonCallback callback = new ButtonCallback() {
+        @Override
+        public void onPositive(MaterialDialog dialog) {
+            String value = getEditText().getText().toString();
+            if (callChangeListener(value) && isPersistent())
+                setText(value);
+        }
+    };
 
-	/**
-	 * Callback listener for the MaterialDialog. Positive button checks with
-	 * OnPreferenceChangeListener before committing user entered text
-	 */
-	private final ButtonCallback callback = new ButtonCallback()
-	{
-		@Override
-		public void onPositive(MaterialDialog dialog) {
-			String value = mEditText.getText().toString();
-			if (callChangeListener(value) && isPersistent())
-				setText(value);
-		}
-	};
+    /**
+     * Copied from DialogPreference.java
+     */
+    private void requestInputMethod(Dialog dialog) {
+        Window window = dialog.getWindow();
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+    }
 
-	/**
-	 * Copied from DialogPreference.java
-	 */
-	private void requestInputMethod(Dialog dialog) {
-		Window window = dialog.getWindow();
-		window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
-	}
+    @Override
+    public void onActivityDestroy() {
+        super.onActivityDestroy();
+        if (mDialog != null && mDialog.isShowing())
+            mDialog.dismiss();
+    }
 }
